@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Sistema de Control de Inventario MILENIUM">
+    <title>MILENIUM - Control de Inventario</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+                'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+        }
+        .loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+        .loading-spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #1e3a8a;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="loading" class="loading">
+        <div>
+            <div class="loading-spinner"></div>
+            <p class="text-white mt-4 text-center">Cargando...</p>
+        </div>
+    </div>
+    <div id="app"></div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+
+    <script>
+        // ==================== CONFIGURACIÓN DE FIREBASE ====================
+        const firebaseConfig = {
+            apiKey: "AIzaSyBRBEFcLKnEu425z68reo5HOogT5wJA2kM",
+            authDomain: "turky-888e9.firebaseapp.com",
+            databaseURL: "https://turky-888e9-default-rtdb.firebaseio.com",
+            projectId: "turky-888e9",
+            storageBucket: "turky-888e9.firebasestorage.app",
+            messagingSenderId: "484968475523",
+            appId: "1:484968475523:web:f800d3ab13fde31fb0e4b6",
+            measurementId: "G-DQ1PMT3TT0"
+        };
+
+        // Inicializar Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+
+        // ==================== ESTADO GLOBAL ====================
+        let state = {
+            currentView: 'inventory',
+            products: [],
+            movements: [],
+            customers: [],
+            dateFilter: 'all',
+            searchTerm: '',
+            showAddProductForm: false,
+            showAddMovementForm: false,
+            showAddCustomerForm: false,
+            editingPrice: null,
+            selectedCustomer: null,
+            loading: true
+        };
+
+        // ==================== FUNCIONES DE FIREBASE ====================
+        
+        // Cargar datos desde Firebase
+        async function loadFromFirebase() {
+            try {
+                const productsRef = database.ref('products');
+                const movementsRef = database.ref('movements');
+                const customersRef = database.ref('customers');
+
+                productsRef.on('value', (snapshot) => {
+                    const data = snapshot.val();
+                    state.products = data ? Object.values(data) : [];
+                    if (!state.loading) render();
+                });
+
+                movementsRef.on('value', (snapshot) => {
+                    const data = snapshot.val();
+                    state.movements = data ? Object.values(data) : [];
+                    if (!state.loading) render();
+                });
+
+                customersRef.on('value', (snapshot) => {
+                    const data = snapshot.val();
+                    state.customers = data ? Object.values(data) : [];
+                    if (!state.loading) render();
+                });
+
+                // Esperar un momento para cargar datos iniciales
+                setTimeout(() => {
+                    state.loading = false;
+                    document.getElementById('loading').style.display = 'none';
+                    render();
+                }, 1000);
+
+            } catch (error) {
+                console.error('Error cargando datos:', error);
+                alert('Error conectando con Firebase. Verifica tu configuración.');
+                state.loading = false;
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        // Guardar en Firebase
+        async function saveToFirebase(collection, data) {
+            try {
+                const ref = database.ref(collection + '/' + data.id);
+                await ref.set(data);
+            } catch (error) {
+                console.error('Error guardando:', error);
+                alert('Error guardando datos');
+            }
+        }
+
+        // Actualizar en Firebase
+        async function updateInFirebase(collection, id, updates) {
+            try {
+                const ref = database.ref(collection + '/' + id);
+                await ref.update(updates);
+            } catch (error) {
+                console.error('Error actualizando:', error);
+                alert('Error actualizando datos');
+            }
+        }
+
+        // Eliminar de Firebase
+        async function deleteFromFirebase(collection, id) {
+            try {
+                const ref = database.ref(collection + '/' + id);
+                await ref.remove();
+            } catch (error) {
+                console.error('Error eliminando:', error);
+                alert('Error eliminando datos');
+            }
+        }
+
+        // ==================== FUNCIONES CRUD ====================
+
+        window.addProduct = async function() {
+            const name = document.getElementById('pn').value.trim();
+            const price = parseFloat(document.getElementById('pp').value);
+            const stock = parseInt(document.getElementById('ps').value) || 0;
+            
+            if (!name || !price) {
+                alert('Por favor completa nombre y precio');
+                return false;
+            }
+            
+            const product = {
+                id: Date.now().toString(),
+                name: name.toUpperCase(),
+                price: price,
+                stock: stock
+            };
+            
+            await saveToFirebase('products', product);
+            state.showAddProductForm = false;
+            return false;
+        };
+
+        window.addMovement = async function() {
+            const type = document.getElementById('mt').value;
+            const productId = document.getElementById('mp').value;
+            const quantity = parseInt(document.getElementById('mq').value);
+            const customerId = document.getElementById('mc').value;
+            const paymentStatus = document.getElementById('mps').value;
+            const notes = document.getElementById('mn').value;
+            
+            if (!productId || !quantity) {
+                alert('Selecciona un producto y cantidad');
+                return false;
+            }
+            
+            const product = state.products.find(p => p.id == productId);
+            if (!product) {
+                alert('Producto no encontrado');
+                return false;
+            }
+            
+            // Crear movimiento
+            const movement = {
+                id: Date.now().toString(),
+                date: new Date().toISOString(),
+                type: type,
+                productId: productId,
+                quantity: quantity,
+                customerId: customerId,
+                paymentStatus: paymentStatus,
+                notes: notes,
+                total: type === 'out' ? product.price * quantity : 0
+            };
+            
+            await saveToFirebase('movements', movement);
+            
+            // Actualizar stock
+            const newStock = type === 'in' ? product.stock + quantity : product.stock - quantity;
+            await updateInFirebase('products', productId, { stock: newStock });
+            
+            // Actualizar deuda si es venta a crédito
+            if (type === 'out' && customerId && paymentStatus === 'pending') {
+                const customer = state.customers.find(c => c.id == customerId);
+                if (customer) {
+                    const newDebt = (customer.debt || 0) + movement.total;
+                    await updateInFirebase('customers', customerId, { debt: newDebt });
+                }
+            }
+            
+            state.showAddMovementForm = false;
+            return false;
+        };
+
+        window.addCustomer = async function() {
+            const name = document.getElementById('cn').value.trim();
+            const phone = document.getElementById('cp').value.trim();
+            const email = document.getElementById('ce').value.trim();
+            
+            if (!name) {
+                alert('El nombre es requerido');
+                return false;
+            }
+            
+            const customer = {
+                id: Date.now().toString(),
+                name: name,
+                phone: phone,
+                email: email,
+                debt: 0
+            };
+            
+            await saveToFirebase('customers', customer);
+            state.showAddCustomerForm = false;
+            return false;
+        };
+
+        window.registerPayment = async function(customerId) {
+            const amount = parseFloat(document.getElementById('pa').value);
+            
+            if (!amount || amount <= 0) {
+                alert('Ingresa un monto válido');
+                return false;
+            }
+            
+            const customer = state.customers.find(c => c.id == customerId);
+            if (customer) {
+                const newDebt = Math.max(0, customer.debt - amount);
+                await updateInFirebase('customers', customerId, { debt: newDebt });
+                
+                const payment = {
+                    id: Date.now().toString(),
+                    date: new Date().toISOString(),
+                    type: 'payment',
+                    customerId: customerId,
+                    amount: amount
+                };
+                
+                await saveToFirebase('movements', payment);
+                state.selectedCustomer = null;
+                render();
+            }
+            return false;
+        };
+
+        window.updatePrice = async function(productId) {
+            const newPrice = parseFloat(document.getElementById('np').value);
+            if (!newPrice || newPrice <= 0) {
+                alert('Precio inválido');
+                return;
+            }
+            
+            await updateInFirebase('products', productId, { price: newPrice });
+            state.editingPrice = null;
+            render();
+        };
+
+        // ==================== FUNCIONES DE NAVEGACIÓN ====================
+
+        window.changeView = function(view) {
+            state.currentView = view;
+            render();
+        };
+
+        window.setDateFilter = function(filter) {
+            state.dateFilter = filter;
+            render();
+        };
+
+        window.toggleProductForm = function() {
+            state.showAddProductForm = !state.showAddProductForm;
+            render();
+        };
+
+        window.toggleMovementForm = function() {
+            state.showAddMovementForm = !state.showAddMovementForm;
+            render();
+        };
+
+        window.toggleCustomerForm = function() {
+            state.showAddCustomerForm = !state.showAddCustomerForm;
+            render();
+        };
+
+        window.editPrice = function(id, price) {
+            state.editingPrice = id;
+            render();
+            setTimeout(() => {
+                const input = document.getElementById('np');
+                if (input) {
+                    input.value = price;
+                    input.focus();
+                }
+            }, 10);
+        };
+
+        window.cancelEditPrice = function() {
+            state.editingPrice = null;
+            render();
+        };
+
+        window.openPayment = function(id) {
+            state.selectedCustomer = id;
+            render();
+        };
+
+        window.closePayment = function() {
+            state.selectedCustomer = null;
+            render();
+        };
+
+        window.updateSearch = function(value) {
+            state.searchTerm = value;
+            render();
+        };
+
+        window.resetData = async function() {
+            const password = prompt('Ingresa la contraseña para resetear los datos:');
+            
+            if (password === null) return;
+            
+            if (password !== 'Turky2026') {
+                alert('❌ Contraseña incorrecta');
+                return;
+            }
+            
+            if (confirm('¿Estás seguro de que quieres borrar TODOS los datos? Esta acción no se puede deshacer.')) {
+                try {
+                    await database.ref('products').remove();
+                    await database.ref('movements').remove();
+                    await database.ref('customers').remove();
+                    
+                    state.products = [];
+                    state.movements = [];
+                    state.customers = [];
+                    state.currentView = 'inventory';
+                    state.showAddProductForm = false;
+                    state.showAddMovementForm = false;
+                    state.showAddCustomerForm = false;
+                    
+                    render();
+                    alert('✅ Datos eliminados correctamente');
+                } catch (error) {
+                    alert('Error eliminando datos: ' + error.message);
+                }
+            }
+        };
+
+        // ==================== FUNCIONES DE CÁLCULO ====================
+
+        function getFilteredMovements() {
+            const now = new Date();
+            return state.movements.filter(m => {
+                if (state.dateFilter === 'all') return true;
+                const mDate = new Date(m.date);
+                if (state.dateFilter === 'today') {
+                    return mDate.toDateString() === now.toDateString();
+                }
+                if (state.dateFilter === 'week') {
+                    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                    return mDate >= weekAgo;
+                }
+                if (state.dateFilter === 'month') {
+                    return mDate.getMonth() === now.getMonth() && mDate.getFullYear() === now.getFullYear();
+                }
+                return true;
+            });
+        }
+
+        function getStats() {
+            const filtered = getFilteredMovements();
+            const totalSales = filtered.filter(m => m.type === 'out').reduce((s, m) => s + (m.total || 0), 0);
+            const totalCollected = filtered.filter(m => m.type === 'out' && m.paymentStatus === 'paid').reduce((s, m) => s + (m.total || 0), 0);
+            const totalPending = state.customers.reduce((s, c) => s + (c.debt || 0), 0);
+            const totalQty = filtered.filter(m => m.type === 'out').reduce((s, m) => s + (m.quantity || 0), 0);
+            return { totalSales, totalCollected, totalPending, totalQty };
+        }
+
+        // ==================== FUNCIONES DE RENDERIZADO ====================
+
+        function render() {
+            const app = document.getElementById('app');
+            let html = renderHeader();
+            html += '<main class="max-w-7xl mx-auto px-4 py-8">';
+
+            if (state.currentView === 'dashboard') {
+                html += renderDashboard();
+            } else if (state.currentView === 'inventory') {
+                html += renderInventory();
+            } else if (state.currentView === 'movements') {
+                html += renderMovements();
+            } else if (state.currentView === 'customers') {
+                html += renderCustomers();
+            }
+
+            html += '</main>';
+            app.innerHTML = html;
+        }
+
+        function renderHeader() {
+            return `
+                <header class="bg-white shadow">
+                    <div class="max-w-7xl mx-auto px-4 py-4">
+                        <div class="flex items-center justify-between flex-wrap gap-4">
+                            <div class="flex items-center gap-3">
+                                <img src="img/logo-milenium.jpg" alt="MILENIUM" class="h-12 w-12 object-contain">
+                                <div>
+                                    <h1 class="text-2xl font-bold text-blue-900">MILENIUM</h1>
+                                    <p class="text-xs text-gray-600">Control de Inventario</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-4">
+                                <nav class="flex gap-2 flex-wrap">
+                                    <button onclick="changeView('dashboard')" class="px-4 py-2 rounded-lg font-medium ${state.currentView === 'dashboard' ? 'bg-blue-900 text-white' : 'bg-gray-100'}">Dashboard</button>
+                                    <button onclick="changeView('inventory')" class="px-4 py-2 rounded-lg font-medium ${state.currentView === 'inventory' ? 'bg-blue-900 text-white' : 'bg-gray-100'}">Inventario</button>
+                                    <button onclick="changeView('movements')" class="px-4 py-2 rounded-lg font-medium ${state.currentView === 'movements' ? 'bg-blue-900 text-white' : 'bg-gray-100'}">Movimientos</button>
+                                    <button onclick="changeView('customers')" class="px-4 py-2 rounded-lg font-medium ${state.currentView === 'customers' ? 'bg-blue-900 text-white' : 'bg-gray-100'}">Clientes</button>
+                                </nav>
+                                <button onclick="resetData()" class="px-3 py-2 bg-red-100 text-red-600 rounded-lg text-sm hover:bg-red-200">🔄 Reset</button>
+                            </div>
+                        </div>
+                    </div>
+                </header>
+            `;
+        }
+
+        function renderDashboard() {
+            const stats = getStats();
+            return `
+                <div class="space-y-6">
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <div class="flex gap-2 items-center flex-wrap">
+                            <span class="font-medium">Período:</span>
+                            <button onclick="setDateFilter('today')" class="px-3 py-1 rounded ${state.dateFilter === 'today' ? 'bg-blue-900 text-white' : 'bg-gray-100'}">Hoy</button>
+                            <button onclick="setDateFilter('week')" class="px-3 py-1 rounded ${state.dateFilter === 'week' ? 'bg-blue-900 text-white' : 'bg-gray-100'}">Semana</button>
+                            <button onclick="setDateFilter('month')" class="px-3 py-1 rounded ${state.dateFilter === 'month' ? 'bg-blue-900 text-white' : 'bg-gray-100'}">Mes</button>
+                            <button onclick="setDateFilter('all')" class="px-3 py-1 rounded ${state.dateFilter === 'all' ? 'bg-blue-900 text-white' : 'bg-gray-100'}">Todo</button>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div class="bg-white p-6 rounded-lg shadow">
+                            <p class="text-sm text-gray-600">Total Ventas</p>
+                            <p class="text-2xl font-bold">$${stats.totalSales.toLocaleString('es-CO')}</p>
+                        </div>
+                        <div class="bg-white p-6 rounded-lg shadow">
+                            <p class="text-sm text-gray-600">Recaudado</p>
+                            <p class="text-2xl font-bold text-green-600">$${stats.totalCollected.toLocaleString('es-CO')}</p>
+                        </div>
+                        <div class="bg-white p-6 rounded-lg shadow">
+                            <p class="text-sm text-gray-600">Pendiente</p>
+                            <p class="text-2xl font-bold text-orange-600">$${stats.totalPending.toLocaleString('es-CO')}</p>
+                        </div>
+                        <div class="bg-white p-6 rounded-lg shadow">
+                            <p class="text-sm text-gray-600">Unidades Vendidas</p>
+                            <p class="text-2xl font-bold">${stats.totalQty}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderInventory() {
+            const filtered = state.products.filter(p => p.name.toLowerCase().includes(state.searchTerm.toLowerCase()));
+            
+            let html = `
+                <div class="space-y-4">
+                    <div class="flex gap-4 flex-wrap">
+                        <input type="text" placeholder="Buscar..." onkeyup="updateSearch(this.value)" class="flex-1 px-4 py-2 border rounded-lg min-w-[200px]">
+                        <button onclick="toggleProductForm()" class="px-4 py-2 bg-blue-900 text-white rounded-lg hover:bg-blue-800">+ Agregar Producto</button>
+                    </div>
+            `;
+
+            if (state.showAddProductForm) {
+                html += `
+                    <div class="bg-white p-6 rounded-lg shadow">
+                        <h3 class="font-bold mb-4">Nuevo Producto</h3>
+                        <form onsubmit="return addProduct();">
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                                <div>
+                                    <label class="block text-sm mb-1">Nombre</label>
+                                    <input type="text" id="pn" class="w-full px-3 py-2 border rounded" required>
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">Precio</label>
+                                    <input type="number" id="pp" class="w-full px-3 py-2 border rounded" step="0.01" required>
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">Stock Inicial</label>
+                                    <input type="number" id="ps" class="w-full px-3 py-2 border rounded" value="0">
+                                </div>
+                            </div>
+                            <div class="flex gap-2 justify-end">
+                                <button type="button" onclick="toggleProductForm()" class="px-4 py-2 bg-gray-200 rounded">Cancelar</button>
+                                <button type="submit" class="px-4 py-2 bg-blue-900 text-white rounded hover:bg-blue-800">Agregar</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+            }
+
+            if (filtered.length === 0) {
+                html += `
+                    <div class="bg-white p-12 rounded-lg shadow text-center">
+                        <p class="text-gray-500 mb-4">No hay productos</p>
+                        <button onclick="toggleProductForm()" class="px-6 py-3 bg-blue-900 text-white rounded-lg hover:bg-blue-800">Agregar Primer Producto</button>
+                    </div>
+                `;
+            } else {
+                html += `
+                    <div class="bg-white rounded-lg shadow overflow-x-auto">
+                        <table class="w-full">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-sm font-medium">Producto</th>
+                                    <th class="px-6 py-3 text-left text-sm font-medium">Stock</th>
+                                    <th class="px-6 py-3 text-left text-sm font-medium">Precio</th>
+                                    <th class="px-6 py-3 text-left text-sm font-medium">Valor</th>
+                                    <th class="px-6 py-3 text-left text-sm font-medium">Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                `;
+                
+                filtered.forEach(p => {
+                    const stockClass = p.stock > 10 ? 'bg-green-100 text-green-800' : p.stock > 0 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800';
+                    html += `
+                        <tr class="border-t">
+                            <td class="px-6 py-4 font-medium">${p.name}</td>
+                            <td class="px-6 py-4"><span class="px-2 py-1 rounded text-sm ${stockClass}">${p.stock}</span></td>
+                            <td class="px-6 py-4">
+                                ${state.editingPrice == p.id ? `
+                                    <div class="flex gap-2">
+                                        <input type="number" id="np" class="w-24 px-2 py-1 border rounded" step="0.01">
+                                        <button onclick="updatePrice('${p.id}')" class="px-2 py-1 bg-green-600 text-white rounded text-sm">✓</button>
+                                        <button onclick="cancelEditPrice()" class="px-2 py-1 bg-gray-300 rounded text-sm">✕</button>
+                                    </div>
+                                ` : `$${p.price.toLocaleString('es-CO')}`}
+                            </td>
+                            <td class="px-6 py-4">$${(p.stock * p.price).toLocaleString('es-CO')}</td>
+                            <td class="px-6 py-4">
+                                ${state.editingPrice != p.id ? `<button onclick="editPrice('${p.id}', ${p.price})" class="text-blue-900">Editar</button>` : ''}
+                            </td>
+                        </tr>
+                    `;
+                });
+                
+                html += '</tbody></table></div>';
+            }
+            
+            html += '</div>';
+            return html;
+        }
+
+        function renderMovements() {
+            let html = `
+                <div class="space-y-4">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-2xl font-bold">Movimientos</h2>
+                        <button onclick="toggleMovementForm()" class="px-4 py-2 bg-blue-900 text-white rounded-lg hover:bg-blue-800">+ Nuevo</button>
+                    </div>
+            `;
+
+            if (state.showAddMovementForm) {
+                html += `
+                    <div class="bg-white p-6 rounded-lg shadow">
+                        <form onsubmit="return addMovement();">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                <div>
+                                    <label class="block text-sm mb-1">Tipo</label>
+                                    <select id="mt" class="w-full px-3 py-2 border rounded">
+                                        <option value="in">Entrada</option>
+                                        <option value="out">Salida/Venta</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">Producto</label>
+                                    <select id="mp" class="w-full px-3 py-2 border rounded" required>
+                                        <option value="">Seleccionar...</option>
+                                        ${state.products.map(p => `<option value="${p.id}">${p.name} (Stock: ${p.stock})</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">Cantidad</label>
+                                    <input type="number" id="mq" class="w-full px-3 py-2 border rounded" min="1" required>
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">Cliente</label>
+                                    <select id="mc" class="w-full px-3 py-2 border rounded">
+                                        <option value="">Venta directa</option>
+                                        ${state.customers.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">Estado Pago</label>
+                                    <select id="mps" class="w-full px-3 py-2 border rounded">
+                                        <option value="paid">Pagado</option>
+                                        <option value="pending">Pendiente</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">Notas</label>
+                                    <input type="text" id="mn" class="w-full px-3 py-2 border rounded">
+                                </div>
+                            </div>
+                            <div class="flex gap-2 justify-end">
+                                <button type="button" onclick="toggleMovementForm()" class="px-4 py-2 bg-gray-200 rounded">Cancelar</button>
+                                <button type="submit" class="px-4 py-2 bg-blue-900 text-white rounded hover:bg-blue-800">Guardar</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+            }
+
+            html += `
+                <div class="bg-white rounded-lg shadow overflow-x-auto">
+                    <table class="w-full">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-sm">Fecha</th>
+                                <th class="px-4 py-3 text-left text-sm">Tipo</th>
+                                <th class="px-4 py-3 text-left text-sm">Producto</th>
+                                <th class="px-4 py-3 text-left text-sm">Cant.</th>
+                                <th class="px-4 py-3 text-left text-sm">Total</th>
+                                <th class="px-4 py-3 text-left text-sm">Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+
+            [...state.movements].reverse().forEach(m => {
+                const p = state.products.find(x => x.id == m.productId);
+                const tipo = m.type === 'in' ? '⬆️ Entrada' : m.type === 'payment' ? '💰 Pago' : '⬇️ Salida';
+                
+                html += `
+                    <tr class="border-t">
+                        <td class="px-4 py-3 text-sm">${new Date(m.date).toLocaleString('es-CO', {dateStyle: 'short', timeStyle: 'short'})}</td>
+                        <td class="px-4 py-3 text-sm">${tipo}</td>
+                        <td class="px-4 py-3 text-sm">${p?.name || '-'}</td>
+                        <td class="px-4 py-3 text-sm">${m.quantity || '-'}</td>
+                        <td class="px-4 py-3 text-sm font-medium">${m.total ? '$' + m.total.toLocaleString('es-CO') : '-'}</td>
+                        <td class="px-4 py-3 text-sm">
+                            ${m.paymentStatus === 'paid' ? '<span class="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">Pagado</span>' : ''}
+                            ${m.paymentStatus === 'pending' ? '<span class="px-2 py-1 bg-orange-100 text-orange-800 rounded text-xs">Pendiente</span>' : ''}
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += '</tbody></table></div></div>';
+            return html;
+        }
+
+        function renderCustomers() {
+            let html = `
+                <div class="space-y-4">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-2xl font-bold">Clientes</h2>
+                        <button onclick="toggleCustomerForm()" class="px-4 py-2 bg-blue-900 text-white rounded-lg hover:bg-blue-800">+ Nuevo</button>
+                    </div>
+            `;
+
+            if (state.showAddCustomerForm) {
+                html += `
+                    <div class="bg-white p-6 rounded-lg shadow">
+                        <form onsubmit="return addCustomer();">
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                                <div>
+                                    <label class="block text-sm mb-1">Nombre</label>
+                                    <input type="text" id="cn" class="w-full px-3 py-2 border rounded" required>
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">Teléfono</label>
+                                    <input type="tel" id="cp" class="w-full px-3 py-2 border rounded">
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">Email</label>
+                                    <input type="email" id="ce" class="w-full px-3 py-2 border rounded">
+                                </div>
+                            </div>
+                            <div class="flex gap-2 justify-end">
+                                <button type="button" onclick="toggleCustomerForm()" class="px-4 py-2 bg-gray-200 rounded">Cancelar</button>
+                                <button type="submit" class="px-4 py-2 bg-blue-900 text-white rounded hover:bg-blue-800">Guardar</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+            }
+
+            html += '<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">';
+
+            state.customers.forEach(c => {
+                const debtColor = c.debt > 0 ? 'text-red-600' : 'text-green-600';
+                html += `
+                    <div class="bg-white p-6 rounded-lg shadow">
+                        <h3 class="font-bold text-lg mb-2">${c.name}</h3>
+                        ${c.phone ? `<p class="text-sm text-gray-600">${c.phone}</p>` : ''}
+                        <div class="border-t mt-4 pt-4">
+                            <div class="flex justify-between mb-3">
+                                <span class="text-sm">Deuda:</span>
+                                <span class="text-xl font-bold ${debtColor}">$${(c.debt || 0).toLocaleString('es-CO')}</span>
+                            </div>
+                            ${c.debt > 0 ? `<button onclick="openPayment('${c.id}')" class="w-full px-4 py-2 bg-green-600 text-white rounded">Registrar Pago</button>` : ''}
+                        </div>
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+
+            if (state.selectedCustomer) {
+                const c = state.customers.find(x => x.id == state.selectedCustomer);
+                if (c) {
+                    html += `
+                        <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onclick="closePayment()">
+                            <div class="bg-white p-6 rounded-lg max-w-md w-full mx-4" onclick="event.stopPropagation()">
+                                <h3 class="text-xl font-bold mb-4">Registrar Pago</h3>
+                                <p class="mb-2">Cliente: <strong>${c.name}</strong></p>
+                                <p class="mb-4">Deuda actual: <strong>$${c.debt.toLocaleString('es-CO')}</strong></p>
+                                <form onsubmit="return registerPayment('${c.id}');">
+                                    <input type="number" id="pa" class="w-full px-3 py-2 border rounded mb-4" placeholder="Monto a pagar" min="0" max="${c.debt}" step="0.01" required>
+                                    <div class="flex gap-2">
+                                        <button type="button" onclick="closePayment()" class="flex-1 px-4 py-2 bg-gray-200 rounded">Cancelar</button>
+                                        <button type="submit" class="flex-1 px-4 py-2 bg-green-600 text-white rounded">Confirmar</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            html += '</div>';
+            return html;
+        }
+
+        // ==================== INICIALIZACIÓN ====================
+        
+        // Cargar datos cuando la página esté lista
+        loadFromFirebase();
+    </script>
+</body>
+</html>
